@@ -2,30 +2,26 @@ import os
 import sqlite3
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
-
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-# === Load Environment Variables ===
+# === Load Env ===
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+ALLOWED_USER_ID = 1708011472  # Replace with your Telegram ID
 
-# === Secure Access ===
-ALLOWED_USER_ID = 1708011472  # Replace this with YOUR Telegram ID
-
-# === DB Setup ===
-conn = sqlite3.connect("kartik_tracker.db", check_same_thread=False)
+# === DB ===
+conn = sqlite3.connect("expenses.db", check_same_thread=False)
 cursor = conn.cursor()
-cursor.execute('''CREATE TABLE IF NOT EXISTS logs (
+cursor.execute('''CREATE TABLE IF NOT EXISTS expenses (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER,
-    type TEXT,
-    content TEXT,
+    amount REAL,
+    category TEXT,
     timestamp TEXT
 )''')
 conn.commit()
 
-# === Auth Check ===
 def is_authorized(user_id):
     return user_id == ALLOWED_USER_ID
 
@@ -35,66 +31,92 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user.id):
         await update.message.reply_text("Access denied. You ain't Kartik.")
         return
-    await update.message.reply_text("Yo Kartik! Tracker Bot Online ✅")
+    await update.message.reply_text("💸 Expense Tracker Bot is live!\nUse /spent <amount> <category> to log.")
 
 async def myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"Your User ID: {update.effective_user.id}")
 
-async def log_entry(update: Update, context: ContextTypes.DEFAULT_TYPE, log_type):
+async def spent(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user.id):
-        await update.message.reply_text("Access denied. You ain't Kartik.")
+        await update.message.reply_text("Access denied.")
         return
-    content = " ".join(context.args)
-    if not content:
-        await update.message.reply_text("Bhai kuch toh likho 😭")
+
+    try:
+        amount = float(context.args[0])
+        category = " ".join(context.args[1:])
+        if not category:
+            raise ValueError
+    except:
+        await update.message.reply_text("⚠️ Usage: /spent <amount> <category>")
         return
-    cursor.execute("INSERT INTO logs (user_id, type, content, timestamp) VALUES (?, ?, ?, ?)", (
-        update.effective_user.id, log_type, content, datetime.now().isoformat()))
+
+    cursor.execute("INSERT INTO expenses (user_id, amount, category, timestamp) VALUES (?, ?, ?, ?)", (
+        update.effective_user.id, amount, category, datetime.now().isoformat()))
     conn.commit()
-    await update.message.reply_text(f"✅ Logged [{log_type}]: {content}")
+    await update.message.reply_text(f"✅ ₹{amount} spent on {category}")
 
 async def summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user.id):
-        await update.message.reply_text("Access denied. You ain't Kartik.")
+        await update.message.reply_text("Access denied.")
         return
-    cursor.execute("SELECT type, content, timestamp FROM logs WHERE user_id=? ORDER BY timestamp DESC LIMIT 10",
-                   (update.effective_user.id,))
-    rows = cursor.fetchall()
-    if not rows:
-        await update.message.reply_text("No logs found, Kartik. You slacking again? 🤡")
-    else:
-        summary_text = "\n".join([f"🕒 {r[2][:16]} - [{r[0]}] {r[1]}" for r in rows])
-        await update.message.reply_text("📊 Last 10 Logs:\n" + summary_text)
 
-async def weeksummary(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    today = datetime.now().date()
+    cursor.execute("SELECT amount, category FROM expenses WHERE user_id=? AND DATE(timestamp)=?",
+                   (update.effective_user.id, today.isoformat()))
+    rows = cursor.fetchall()
+
+    if not rows:
+        await update.message.reply_text("No expenses today. Your wallet's proud 🤑")
+        return
+
+    total = sum(row[0] for row in rows)
+    breakdown = {}
+    for amount, category in rows:
+        breakdown[category] = breakdown.get(category, 0) + amount
+
+    breakdown_text = "\n".join([f"• {cat}: ₹{amt:.2f}" for cat, amt in breakdown.items()])
+    await update.message.reply_text(f"💰 Today's Spending: ₹{total:.2f}\n\n{breakdown_text}")
+
+async def weekly(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user.id):
-        await update.message.reply_text("Access denied. You ain't Kartik.")
+        await update.message.reply_text("Access denied.")
         return
-    one_week_ago = datetime.now() - timedelta(days=7)
-    cursor.execute(
-        "SELECT type, content, timestamp FROM logs WHERE user_id=? AND timestamp >= ? ORDER BY timestamp DESC",
-        (update.effective_user.id, one_week_ago.isoformat())
-    )
-    rows = cursor.fetchall()
-    if not rows:
-        await update.message.reply_text("No logs from the past week. Either you're slacking, or lying. 🤥")
-    else:
-        summary_text = "\n".join([f"🗓 {r[2][:16]} - [{r[0]}] {r[1]}" for r in rows])
-        await update.message.reply_text("📅 Your Last 7 Days Activity:\n" + summary_text)
 
-# === App ===
+    last_week = datetime.now() - timedelta(days=7)
+    cursor.execute("SELECT amount, category FROM expenses WHERE user_id=? AND timestamp >= ?",
+                   (update.effective_user.id, last_week.isoformat()))
+    rows = cursor.fetchall()
+
+    if not rows:
+        await update.message.reply_text("No expenses in the last 7 days. Legend.")
+        return
+
+    total = sum(row[0] for row in rows)
+    breakdown = {}
+    for amount, category in rows:
+        breakdown[category] = breakdown.get(category, 0) + amount
+
+    breakdown_text = "\n".join([f"• {cat}: ₹{amt:.2f}" for cat, amt in breakdown.items()])
+    await update.message.reply_text(f"📆 Last 7 Days Spending: ₹{total:.2f}\n\n{breakdown_text}")
+
+async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_authorized(update.effective_user.id):
+        await update.message.reply_text("Access denied.")
+        return
+
+    cursor.execute("DELETE FROM expenses WHERE user_id=?", (update.effective_user.id,))
+    conn.commit()
+    await update.message.reply_text("🧹 All your expense logs have been wiped. Start fresh!")
+
+# === App Init ===
 app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-# === Command Handlers ===
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("myid", myid))
-app.add_handler(CommandHandler("logstudy", lambda u, c: log_entry(u, c, "Study")))
-app.add_handler(CommandHandler("logproject", lambda u, c: log_entry(u, c, "Project")))
-app.add_handler(CommandHandler("braindump", lambda u, c: log_entry(u, c, "BrainDump")))
-app.add_handler(CommandHandler("wasted", lambda u, c: log_entry(u, c, "WastedTime")))
-app.add_handler(CommandHandler("mood", lambda u, c: log_entry(u, c, "Mood")))
+app.add_handler(CommandHandler("spent", spent))
 app.add_handler(CommandHandler("summary", summary))
-app.add_handler(CommandHandler("weeksummary", weeksummary))
+app.add_handler(CommandHandler("weekly", weekly))
+app.add_handler(CommandHandler("reset", reset))
 
-print("Bot running...")
+print("Expense Tracker Bot running...")
 app.run_polling()
