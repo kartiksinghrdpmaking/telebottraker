@@ -11,7 +11,7 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 # === Secure Access ===
-ALLOWED_USER_ID = 123456789  # Replace this with YOUR Telegram ID
+ALLOWED_USER_ID = 1708011472  # Replace this with YOUR Telegram ID
 
 # === DB Setup ===
 conn = sqlite3.connect("kartik_tracker.db", check_same_thread=False)
